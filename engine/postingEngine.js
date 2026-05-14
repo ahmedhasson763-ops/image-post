@@ -18,6 +18,7 @@ const axios = require('axios');
 const { runQuery, getQuery, allQuery } = require('../database/db');
 const { postToPage } = require('../services/facebookService');
 const { getProxyForPage, createProxyAgent } = require('../services/proxyService');
+const { generateCaption } = require('../services/aiCaptionService');
 
 const MEDIA_EXTENSIONS = [
   '.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v',
@@ -55,7 +56,9 @@ let engine = {
   completedPageNames: [],   // last done page names
   upcomingPageNames: [],     // next upcoming page names
   allPageNames: [],          // all page names in order
-  lastPostResult: null       // last post result for error display
+  lastPostResult: null,      // last post result for error display
+  lastCaption: '',           // most recent caption posted (for live display)
+  lastCaptionSource: ''      // 'filename' or 'ai:<provider>:<model>'
 };
 
 // ══════════════════════════════════════
@@ -225,14 +228,41 @@ async function saveEngineState() {
   } catch (e) { console.error('[Engine] State save error:', e.message); }
 }
 
-async function logPost(sessionId, pageId, pageName, filePath, fileName, caption, status, errorMsg = null, proxyInfo = '') {
+async function logPost(sessionId, pageId, pageName, filePath, fileName, caption, status, errorMsg = null, proxyInfo = '', captionSource = '') {
   try {
-    await runQuery(`INSERT INTO posting_logs 
-      (session_id, page_id, page_name, content_file, content_name, caption, status, error_msg, proxy_info, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [sessionId, pageId, pageName, filePath, fileName, caption, status, errorMsg, proxyInfo, Date.now()]
+    await runQuery(`INSERT INTO posting_logs
+      (session_id, page_id, page_name, content_file, content_name, caption, status, error_msg, proxy_info, caption_source, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [sessionId, pageId, pageName, filePath, fileName, caption, status, errorMsg, proxyInfo, captionSource, Date.now()]
     );
   } catch (e) {}
+}
+
+/**
+ * Build the caption for a content file.
+ * 1. If AI captions are enabled and at least one provider succeeds → use AI caption.
+ * 2. Otherwise (AI off, no providers, or all fail) → fall back to the filename
+ *    (without extension), preserving the original behavior of the tool.
+ */
+async function buildCaptionForFile(contentPath) {
+  const filenameCaption = path.parse(contentPath).name;
+  try {
+    const result = await generateCaption({
+      imagePath: contentPath,
+      filename: path.basename(contentPath)
+    });
+    if (result.caption) {
+      const src = `ai:${result.used.provider}:${result.used.model}`;
+      console.log(`[Engine] 🤖 AI caption ready via ${src}`);
+      return { caption: result.caption, source: src };
+    }
+    if (result.error && !/disabled|No enabled/i.test(result.error)) {
+      console.log(`[Engine] ⚠️ AI caption failed (${result.error}). Falling back to filename.`);
+    }
+  } catch (e) {
+    console.log(`[Engine] ⚠️ AI caption exception: ${e.message}. Falling back to filename.`);
+  }
+  return { caption: filenameCaption, source: 'filename' };
 }
 
 // ══════════════════════════════════════
@@ -356,10 +386,14 @@ async function executeSession(sessionId, startFromIndex = 0) {
     // Pick the FIRST content file from the shared pool
     const contentPath = contentFiles[0];
     const contentName = path.basename(contentPath);
-    const caption = path.parse(contentPath).name; // filename without extension = caption
 
     engine.currentFileName = contentName;
     await saveEngineState();
+
+    // Build caption — AI if configured, otherwise filename fallback
+    const { caption, source: captionSource } = await buildCaptionForFile(contentPath);
+    engine.lastCaption = caption;
+    engine.lastCaptionSource = captionSource;
 
     // Look up proxy for this page (if globally enabled)
     let proxyAgent = null;
@@ -410,24 +444,24 @@ async function executeSession(sessionId, startFromIndex = 0) {
       
       await runQuery(`INSERT INTO progress (session_id, page_id, page_name, content_file, content_name, status, posted_at)
         VALUES (?,?,?,?,?,?,?)`, [sessionId, page.id, page.name, contentPath, contentName, 'success', Date.now()]);
-      await logPost(sessionId, page.id, page.name, contentPath, contentName, caption, 'success', null, proxyLabel);
-      
+      await logPost(sessionId, page.id, page.name, contentPath, contentName, caption, 'success', null, proxyLabel, captionSource);
+
       // Track completed page
-      engine.completedPageNames.push({ id: page.id, name: page.name, status: 'success', time: Date.now(), proxy: proxyLabel });
-      engine.lastPostResult = { page: page.name, status: 'success' };
+      engine.completedPageNames.push({ id: page.id, name: page.name, status: 'success', time: Date.now(), proxy: proxyLabel, captionSource });
+      engine.lastPostResult = { page: page.name, status: 'success', captionSource };
     } else {
       console.log(`[Engine] ❌ Failed for "${page.name}": ${result.error}`);
-      
+
       // Move to failed folder
       moveToFailed(contentPath);
-      
+
       await runQuery(`INSERT INTO progress (session_id, page_id, page_name, content_file, content_name, status, error_msg, posted_at)
         VALUES (?,?,?,?,?,?,?,?)`, [sessionId, page.id, page.name, contentPath, contentName, 'failed', result.error, Date.now()]);
-      await logPost(sessionId, page.id, page.name, contentPath, contentName, caption, 'failed', result.error, proxyLabel);
-      
+      await logPost(sessionId, page.id, page.name, contentPath, contentName, caption, 'failed', result.error, proxyLabel, captionSource);
+
       // Track completed page (even failed ones)
-      engine.completedPageNames.push({ id: page.id, name: page.name, status: 'failed', error: result.error, time: Date.now(), proxy: proxyLabel });
-      engine.lastPostResult = { page: page.name, status: 'failed', error: result.error };
+      engine.completedPageNames.push({ id: page.id, name: page.name, status: 'failed', error: result.error, time: Date.now(), proxy: proxyLabel, captionSource });
+      engine.lastPostResult = { page: page.name, status: 'failed', error: result.error, captionSource };
     }
 
     // Update session progress
@@ -720,7 +754,9 @@ function getEngineState() {
     upcomingPageNames: engine.upcomingPageNames,               // next 5 upcoming
     allPageNames: engine.allPageNames,
     estimatedFinishTime,
-    lastPostResult: engine.lastPostResult
+    lastPostResult: engine.lastPostResult,
+    lastCaption: engine.lastCaption,
+    lastCaptionSource: engine.lastCaptionSource
   };
 }
 

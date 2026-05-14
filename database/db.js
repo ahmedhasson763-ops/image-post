@@ -139,9 +139,42 @@ function initDB() {
     db.run(`ALTER TABLE proxies ADD COLUMN country TEXT DEFAULT ''`, () => {});
     db.run(`ALTER TABLE proxies ADD COLUMN city TEXT DEFAULT ''`, () => {});
     db.run(`ALTER TABLE proxies ADD COLUMN country_code TEXT DEFAULT ''`, () => {});
-    db.run(`ALTER TABLE posting_logs ADD COLUMN proxy_info TEXT DEFAULT ''`, () => {
+    db.run(`ALTER TABLE posting_logs ADD COLUMN proxy_info TEXT DEFAULT ''`, () => {});
+    db.run(`ALTER TABLE posting_logs ADD COLUMN caption_source TEXT DEFAULT ''`, () => {});
+
+    // ════════════════════════════════════════
+    // AI caption generator tables
+    // ════════════════════════════════════════
+    db.run(`CREATE TABLE IF NOT EXISTS ai_providers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      supports_vision INTEGER DEFAULT 0,
+      priority INTEGER DEFAULT 100,
+      enabled INTEGER DEFAULT 1,
+      last_error TEXT,
+      last_used INTEGER,
+      label TEXT DEFAULT '',
+      created_at INTEGER DEFAULT (strftime('%s','now')*1000)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS ai_settings (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      enabled INTEGER DEFAULT 0,
+      language TEXT DEFAULT 'es-MX',
+      niche TEXT DEFAULT '',
+      tool_name TEXT DEFAULT 'imagestool1',
+      use_vision INTEGER DEFAULT 1,
+      fallback_to_filename INTEGER DEFAULT 1,
+      custom_prompt TEXT,
+      default_content_folder TEXT DEFAULT ''
+    )`);
+
+    db.run(`INSERT OR IGNORE INTO ai_settings (id, enabled, language, niche, tool_name, use_vision, fallback_to_filename)
+            VALUES (1, 0, 'es-MX', '', 'imagestool1', 1, 1)`, () => {
       // This callback fires after ALL statements — DB is fully ready
-      console.log('[DB] ✅ All tables ready (with proxy + geo support).');
+      console.log('[DB] ✅ All tables ready (proxy + geo + AI captions).');
       _resolveReady();
     });
   });
