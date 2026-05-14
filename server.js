@@ -9,7 +9,7 @@ const { dbReady } = require('./database/db');
 const apiRoutes = require('./routes/apiRoutes');
 
 const app = express();
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5016;
 
 app.use(cors());
 app.use(express.json());

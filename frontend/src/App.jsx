@@ -47,6 +47,29 @@ function App() {
   const [settingsUseProxies, setSettingsUseProxies] = useState(true);
   const [serverInfo, setServerInfo] = useState(null);
 
+  // AI Captions state
+  const [aiSettings, setAiSettings] = useState({
+    enabled: false,
+    language: 'es-MX',
+    niche: '',
+    tool_name: 'imagestool1',
+    use_vision: true,
+    fallback_to_filename: true,
+    custom_prompt: '',
+    default_content_folder: ''
+  });
+  const [aiCatalog, setAiCatalog] = useState([]);
+  const [aiProviders, setAiProviders] = useState([]);
+  const [newProvider, setNewProvider] = useState({
+    provider: 'openrouter',
+    api_key: '',
+    model: '',
+    supports_vision: true,
+    priority: 100,
+    label: ''
+  });
+  const [aiTestResult, setAiTestResult] = useState(null);
+
   const restoredRef = useRef(false);
   const pollRef = useRef(null);
   const countdownRef = useRef(null);
@@ -133,6 +156,31 @@ function App() {
     try { const data = await api('GET', '/server-info'); setServerInfo(data); } catch (e) {}
   }, [api]);
 
+  const loadAISettings = useCallback(async () => {
+    try {
+      const data = await api('GET', '/ai/settings');
+      setAiSettings({
+        enabled: !!data.enabled,
+        language: data.language || 'es-MX',
+        niche: data.niche || '',
+        tool_name: data.tool_name || 'imagestool1',
+        use_vision: data.use_vision !== false,
+        fallback_to_filename: data.fallback_to_filename !== false,
+        custom_prompt: data.custom_prompt || '',
+        default_content_folder: data.default_content_folder || ''
+      });
+      setAiCatalog(data.catalog || []);
+    } catch (e) {}
+  }, [api]);
+
+  const loadAIProviders = useCallback(async () => {
+    try {
+      const data = await api('GET', '/ai/providers');
+      setAiProviders(data.providers || []);
+      if (data.catalog) setAiCatalog(data.catalog);
+    } catch (e) {}
+  }, [api]);
+
 
   const restoreFromBackend = useCallback(async () => {
     if (restoredRef.current) return;
@@ -152,14 +200,18 @@ function App() {
   }, [api]);
 
   useEffect(() => {
-    loadTokens(); loadPages(); loadLogs(); loadSettings(); loadProxies(); loadProxyMap(); loadServerInfo(); restoreFromBackend();
+    loadTokens(); loadPages(); loadLogs(); loadSettings(); loadProxies(); loadProxyMap(); loadServerInfo(); loadAISettings(); loadAIProviders(); restoreFromBackend();
     pollRef.current = setInterval(() => { loadStatus(); loadLogs(); loadServerInfo(); }, 5000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (restCountdownRef.current) clearInterval(restCountdownRef.current);
     };
-  }, [loadTokens, loadPages, loadLogs, loadSettings, loadProxies, loadProxyMap, restoreFromBackend]);
+  }, [loadTokens, loadPages, loadLogs, loadSettings, loadProxies, loadProxyMap, loadAISettings, loadAIProviders, restoreFromBackend]);
+
+  useEffect(() => {
+    if (activeTab === 'ai') { loadAISettings(); loadAIProviders(); }
+  }, [activeTab, loadAISettings, loadAIProviders]);
 
   useEffect(() => { if (activeTab === 'analytics') loadAnalytics(); }, [activeTab, loadAnalytics]);
   useEffect(() => { if (activeTab === 'proxy') { loadProxies(); loadProxyMap(); loadPages(); } }, [activeTab, loadProxies, loadProxyMap, loadPages]);
@@ -342,6 +394,65 @@ function App() {
   };
 
   // ═══════════════════════════════════════
+  // AI CAPTION ACTIONS
+  // ═══════════════════════════════════════
+
+  const handleSaveAISettings = async () => {
+    setLoading(l => ({ ...l, aiSettings: true }));
+    try {
+      const result = await api('POST', '/ai/settings', aiSettings);
+      if (result.error) throw new Error(result.error);
+      showAlert('success', '✅ AI settings saved');
+    } catch (e) { showAlert('error', e.message); }
+    setLoading(l => ({ ...l, aiSettings: false }));
+  };
+
+  const handleAddAIProvider = async () => {
+    if (!newProvider.api_key.trim()) return showAlert('error', 'API key is required');
+    if (!newProvider.model.trim()) return showAlert('error', 'Model is required');
+    setLoading(l => ({ ...l, aiAdd: true }));
+    try {
+      const result = await api('POST', '/ai/providers', newProvider);
+      if (result.error) throw new Error(result.error);
+      showAlert('success', '✅ AI provider added');
+      setNewProvider({ provider: 'openrouter', api_key: '', model: '', supports_vision: true, priority: 100, label: '' });
+      loadAIProviders();
+    } catch (e) { showAlert('error', e.message); }
+    setLoading(l => ({ ...l, aiAdd: false }));
+  };
+
+  const handleToggleAIProvider = async (id) => {
+    try { await api('POST', `/ai/providers/${id}/toggle`); loadAIProviders(); } catch (e) {}
+  };
+
+  const handleDeleteAIProvider = async (id) => {
+    if (!confirm('Delete this AI provider?')) return;
+    try { await api('DELETE', `/ai/providers/${id}`); loadAIProviders(); } catch (e) {}
+  };
+
+  const handleUpdateAIPriority = async (id, priority) => {
+    try { await api('PUT', `/ai/providers/${id}`, { priority }); loadAIProviders(); } catch (e) {}
+  };
+
+  const handleTestAICaption = async (providerId = null) => {
+    setLoading(l => ({ ...l, aiTest: true }));
+    setAiTestResult(null);
+    try {
+      let imagePath = null;
+      if (contentFolder) {
+        const sample = await api('GET', `/ai/sample?folder=${encodeURIComponent(contentFolder)}`);
+        if (sample.image) imagePath = sample.image;
+      }
+      const body = providerId ? { image_path: imagePath, provider_id: providerId } : { image_path: imagePath };
+      const result = await api('POST', '/ai/test', body);
+      setAiTestResult(result);
+      if (result.success) showAlert('success', `✅ AI caption generated via ${result.used?.provider} / ${result.used?.model}`);
+      else showAlert('error', `❌ ${result.error || 'AI test failed'}`);
+    } catch (e) { showAlert('error', e.message); }
+    setLoading(l => ({ ...l, aiTest: false }));
+  };
+
+  // ═══════════════════════════════════════
   // PROXY ACTIONS
   // ═══════════════════════════════════════
 
@@ -510,7 +621,7 @@ function App() {
         <div className="logo">
           <div className="logo-icon">📁</div>
           <div className="logo-text">
-            <h1>Folder2Page</h1>
+            <h1>Folder2Page · {aiSettings.tool_name || 'imagestool1'}</h1>
             <p>Auto Content Engine</p>
           </div>
         </div>
@@ -544,7 +655,13 @@ function App() {
 
       {/* TAB NAV */}
       <nav className="tab-nav">
-        {[{ id: 'dashboard', label: '🏠 Dashboard' }, { id: 'proxy', label: '🛡️ Proxy' }, { id: 'analytics', label: '📊 Analytics' }, { id: 'settings', label: '⚙️ Settings' }].map(tab => (
+        {[
+          { id: 'dashboard', label: '🏠 Dashboard' },
+          { id: 'ai', label: '🤖 AI Captions' },
+          { id: 'proxy', label: '🛡️ Proxy' },
+          { id: 'analytics', label: '📊 Analytics' },
+          { id: 'settings', label: '⚙️ Settings' }
+        ].map(tab => (
           <button key={tab.id} className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
         ))}
       </nav>
@@ -658,7 +775,7 @@ function App() {
               <input 
                 type="text" 
                 style={{ flex: 1, padding: '10px 14px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', fontFamily: 'monospace' }}
-                placeholder="Type folder path here (e.g., /root/videos)"
+                placeholder={`Type folder path here (e.g., ${aiSettings.default_content_folder || `/root/${aiSettings.tool_name || 'imagestool1'}content`})`}
                 value={contentFolder || ''}
                 onChange={e => setContentFolder(e.target.value)}
                 onBlur={() => contentFolder && handleScanFolder(contentFolder)}
@@ -856,6 +973,325 @@ function App() {
                     <span className="log-time">{formatTime(log.created_at)}</span>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ TAB: AI CAPTIONS ═══ */}
+      {activeTab === 'ai' && (
+        <div className="tab-content">
+          <div className="section">
+            <div className="section-title"><span className="icon">🤖</span> AI Caption Settings</div>
+            <p className="section-desc">
+              Generate Facebook post captions automatically with AI. The engine tries each enabled provider in priority order (lowest first) and falls back to the next on any error or rate-limit. If all fail, the filename is used as caption.
+            </p>
+
+            <div className="config-row">
+              <div className="config-label">
+                <span className="config-icon">🟢</span>
+                <div>
+                  <div className="config-title">Enable AI captions</div>
+                  <div className="config-desc">When OFF the engine just uses the filename (legacy behavior).</div>
+                </div>
+              </div>
+              <div className="preset-buttons">
+                <button className={`btn btn-sm preset-btn ${aiSettings.enabled ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAiSettings(s => ({ ...s, enabled: true }))}>ON</button>
+                <button className={`btn btn-sm preset-btn ${!aiSettings.enabled ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAiSettings(s => ({ ...s, enabled: false }))}>OFF</button>
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="config-label">
+                <span className="config-icon">🌐</span>
+                <div>
+                  <div className="config-title">Language</div>
+                  <div className="config-desc">Default: Mexican Spanish (es-MX). Change per tool / per clone.</div>
+                </div>
+              </div>
+              <select
+                value={aiSettings.language}
+                onChange={e => setAiSettings(s => ({ ...s, language: e.target.value }))}
+                style={{ padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px' }}
+              >
+                <option value="es-MX">🇲🇽 Mexican Spanish (es-MX)</option>
+                <option value="es">🌎 Neutral Spanish (es)</option>
+                <option value="es-ES">🇪🇸 Castilian Spanish (es-ES)</option>
+                <option value="en">🇺🇸 English (en)</option>
+                <option value="en-US">🇺🇸 American English</option>
+                <option value="en-GB">🇬🇧 British English</option>
+                <option value="pt-BR">🇧🇷 Brazilian Portuguese</option>
+                <option value="pt">🇵🇹 European Portuguese</option>
+                <option value="fr">🇫🇷 French</option>
+                <option value="de">🇩🇪 German</option>
+                <option value="it">🇮🇹 Italian</option>
+                <option value="hi">🇮🇳 Hindi</option>
+                <option value="bn">🇧🇩 Bengali</option>
+                <option value="ar">🇸🇦 Arabic</option>
+                <option value="ja">🇯🇵 Japanese</option>
+                <option value="ko">🇰🇷 Korean</option>
+              </select>
+            </div>
+
+            <div className="config-row">
+              <div className="config-label">
+                <span className="config-icon">🏷️</span>
+                <div>
+                  <div className="config-title">Tool name</div>
+                  <div className="config-desc">Used to derive the default content folder: <code>/root/&lt;tool_name&gt;content</code></div>
+                </div>
+              </div>
+              <input
+                type="text"
+                value={aiSettings.tool_name}
+                onChange={e => setAiSettings(s => ({ ...s, tool_name: e.target.value }))}
+                placeholder="imagestool1"
+                style={{ padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', minWidth: '200px' }}
+              />
+            </div>
+
+            <div className="config-row" style={{ display: 'block' }}>
+              <div className="config-label" style={{ marginBottom: '8px' }}>
+                <span className="config-icon">🎯</span>
+                <div>
+                  <div className="config-title">Page niche / topic hint</div>
+                  <div className="config-desc">Helps the AI write on-topic captions. Example: "funny cat memes", "Mexican street food", "Trump news USA"</div>
+                </div>
+              </div>
+              <textarea
+                value={aiSettings.niche}
+                onChange={e => setAiSettings(s => ({ ...s, niche: e.target.value }))}
+                placeholder="Memes about street food in Mexico, casual tone..."
+                rows={2}
+                style={{ width: '100%', padding: '10px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', resize: 'vertical' }}
+              />
+            </div>
+
+            <div className="config-row">
+              <div className="config-label">
+                <span className="config-icon">👁️</span>
+                <div>
+                  <div className="config-title">Use vision (send image to AI)</div>
+                  <div className="config-desc">OFF = caption inferred from filename only (cheaper, supports text-only models).</div>
+                </div>
+              </div>
+              <div className="preset-buttons">
+                <button className={`btn btn-sm preset-btn ${aiSettings.use_vision ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAiSettings(s => ({ ...s, use_vision: true }))}>ON</button>
+                <button className={`btn btn-sm preset-btn ${!aiSettings.use_vision ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAiSettings(s => ({ ...s, use_vision: false }))}>OFF</button>
+              </div>
+            </div>
+
+            <div className="config-row">
+              <div className="config-label">
+                <span className="config-icon">📁</span>
+                <div>
+                  <div className="config-title">Default content folder</div>
+                  <div className="config-desc">Used by the Dashboard "Browse" button on Linux. Leave empty to derive from tool_name.</div>
+                </div>
+              </div>
+              <input
+                type="text"
+                value={aiSettings.default_content_folder}
+                onChange={e => setAiSettings(s => ({ ...s, default_content_folder: e.target.value }))}
+                placeholder={`/root/${aiSettings.tool_name || 'imagestool1'}content`}
+                style={{ padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '13px', fontFamily: 'monospace', minWidth: '280px' }}
+              />
+            </div>
+
+            <div className="config-row" style={{ display: 'block' }}>
+              <div className="config-label" style={{ marginBottom: '8px' }}>
+                <span className="config-icon">✏️</span>
+                <div>
+                  <div className="config-title">Custom prompt template (advanced, optional)</div>
+                  <div className="config-desc">Use placeholders: <code>{'{language}'}</code> <code>{'{niche}'}</code> <code>{'{filename}'}</code> <code>{'{has_image}'}</code>. Leave empty to use the built-in Facebook-guideline-safe prompt.</div>
+                </div>
+              </div>
+              <textarea
+                value={aiSettings.custom_prompt}
+                onChange={e => setAiSettings(s => ({ ...s, custom_prompt: e.target.value }))}
+                rows={5}
+                placeholder=""
+                style={{ width: '100%', padding: '10px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '13px', fontFamily: 'monospace', resize: 'vertical' }}
+              />
+            </div>
+
+            <button className="btn btn-success btn-lg" onClick={handleSaveAISettings} disabled={loading.aiSettings} style={{ width: '100%', marginTop: '12px' }}>
+              {loading.aiSettings ? <span className="loading-spinner"></span> : '💾'} Save AI Settings
+            </button>
+          </div>
+
+          {/* PROVIDERS LIST */}
+          <div className="section">
+            <div className="section-title"><span className="icon">🔑</span> AI Providers (Fallback Chain)</div>
+            <p className="section-desc">
+              Add one or more API keys. Lower priority number = tried first. On failure (rate-limit, network, etc.) the engine falls through to the next provider automatically.
+            </p>
+
+            {aiProviders.length === 0 && (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', background: 'var(--surface-light)', borderRadius: '8px', marginBottom: '12px' }}>
+                No AI providers yet. Add one below 👇
+              </div>
+            )}
+
+            {aiProviders.map(p => (
+              <div key={p.id} className="config-row" style={{ alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>
+                    {p.provider === 'openrouter' ? '🔀' : p.provider === 'gemini' ? '✨' : p.provider === 'groq' ? '⚡' : '🤖'} {p.label || p.provider}
+                    {p.supports_vision ? <span style={{ fontSize: '11px', marginLeft: '6px', padding: '2px 6px', background: 'var(--accent-light, #4a90e2)', color: 'white', borderRadius: '10px' }}>VISION</span> : null}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                    {p.model} · key {p.api_key} · priority {p.priority}
+                  </div>
+                  {p.last_error && <div style={{ fontSize: '11px', color: 'var(--danger)' }}>⚠️ Last error: {p.last_error.slice(0, 120)}</div>}
+                  {p.last_used && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>✓ Last used: {new Date(p.last_used).toLocaleString()}</div>}
+                </div>
+                <input
+                  type="number"
+                  value={p.priority}
+                  min={1}
+                  max={999}
+                  onChange={e => handleUpdateAIPriority(p.id, parseInt(e.target.value) || 100)}
+                  style={{ width: '70px', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--surface)', color: 'var(--text)' }}
+                  title="Priority (lower = tried first)"
+                />
+                <button className="btn btn-sm btn-outline" onClick={() => handleTestAICaption(p.id)} disabled={loading.aiTest}>🧪 Test</button>
+                <button className={`btn btn-sm ${p.enabled ? 'btn-primary' : 'btn-outline'}`} onClick={() => handleToggleAIProvider(p.id)}>
+                  {p.enabled ? 'ON' : 'OFF'}
+                </button>
+                <button className="btn btn-sm btn-danger" onClick={() => handleDeleteAIProvider(p.id)}>🗑️</button>
+              </div>
+            ))}
+          </div>
+
+          {/* ADD NEW PROVIDER */}
+          <div className="section">
+            <div className="section-title"><span className="icon">➕</span> Add AI Provider</div>
+            <div className="config-row">
+              <div className="config-label" style={{ minWidth: '120px' }}><span className="config-icon">🏷️</span><div><div className="config-title">Provider</div></div></div>
+              <select
+                value={newProvider.provider}
+                onChange={e => {
+                  const provider = e.target.value;
+                  const cat = aiCatalog.find(c => c.key === provider);
+                  const firstModel = cat?.models?.[0];
+                  setNewProvider(np => ({ ...np, provider, model: firstModel?.id || '', supports_vision: !!firstModel?.vision }));
+                }}
+                style={{ padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px' }}
+              >
+                {aiCatalog.map(c => <option key={c.key} value={c.key}>{c.name}</option>)}
+              </select>
+            </div>
+
+            <div className="config-row">
+              <div className="config-label" style={{ minWidth: '120px' }}><span className="config-icon">🧠</span><div><div className="config-title">Model</div></div></div>
+              <select
+                value={newProvider.model}
+                onChange={e => {
+                  const id = e.target.value;
+                  const cat = aiCatalog.find(c => c.key === newProvider.provider);
+                  const m = cat?.models?.find(x => x.id === id);
+                  setNewProvider(np => ({ ...np, model: id, supports_vision: !!m?.vision }));
+                }}
+                style={{ padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', minWidth: '280px' }}
+              >
+                <option value="">— Pick a model —</option>
+                {aiCatalog.find(c => c.key === newProvider.provider)?.models?.map(m => (
+                  <option key={m.id} value={m.id}>{m.id}{m.vision ? '  (vision)' : ''}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={newProvider.model}
+                onChange={e => setNewProvider(np => ({ ...np, model: e.target.value }))}
+                placeholder="or type custom model id"
+                style={{ flex: 1, padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '13px', fontFamily: 'monospace' }}
+              />
+            </div>
+
+            <div className="config-row">
+              <div className="config-label" style={{ minWidth: '120px' }}><span className="config-icon">🔐</span><div><div className="config-title">API key</div></div></div>
+              <input
+                type="password"
+                value={newProvider.api_key}
+                onChange={e => setNewProvider(np => ({ ...np, api_key: e.target.value }))}
+                placeholder="sk-... / AIza... / gsk_..."
+                style={{ flex: 1, padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '13px', fontFamily: 'monospace' }}
+              />
+            </div>
+
+            <div className="config-row">
+              <div className="config-label" style={{ minWidth: '120px' }}><span className="config-icon">🏷️</span><div><div className="config-title">Label (optional)</div></div></div>
+              <input
+                type="text"
+                value={newProvider.label}
+                onChange={e => setNewProvider(np => ({ ...np, label: e.target.value }))}
+                placeholder="OpenRouter free Gemini"
+                style={{ flex: 1, padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px' }}
+              />
+            </div>
+
+            <div className="config-row">
+              <div className="config-label" style={{ minWidth: '120px' }}><span className="config-icon">🔢</span><div><div className="config-title">Priority</div><div className="config-desc">Lower = tried first</div></div></div>
+              <input
+                type="number"
+                value={newProvider.priority}
+                min={1}
+                max={999}
+                onChange={e => setNewProvider(np => ({ ...np, priority: parseInt(e.target.value) || 100 }))}
+                style={{ width: '90px', padding: '8px 12px', border: '2px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px' }}
+              />
+              <div style={{ flex: 1 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
+                <input
+                  type="checkbox"
+                  checked={!!newProvider.supports_vision}
+                  onChange={e => setNewProvider(np => ({ ...np, supports_vision: e.target.checked }))}
+                />
+                Supports vision
+              </label>
+            </div>
+
+            <button className="btn btn-primary btn-lg" onClick={handleAddAIProvider} disabled={loading.aiAdd} style={{ width: '100%' }}>
+              {loading.aiAdd ? <span className="loading-spinner"></span> : '➕'} Add Provider
+            </button>
+          </div>
+
+          {/* TEST PANEL */}
+          <div className="section">
+            <div className="section-title"><span className="icon">🧪</span> Test Caption Generation</div>
+            <p className="section-desc">
+              Runs the fallback chain (or a single provider via the Test button on the provider row) against a sample image from your content folder, or text-only if no folder is set.
+            </p>
+            <button className="btn btn-primary" onClick={() => handleTestAICaption(null)} disabled={loading.aiTest}>
+              {loading.aiTest ? <span className="loading-spinner"></span> : '🧪'} Run test (full chain)
+            </button>
+
+            {aiTestResult && (
+              <div style={{ marginTop: '16px', padding: '14px', borderRadius: '8px', background: 'var(--surface-light)', border: `2px solid ${aiTestResult.success ? 'var(--success, #4caf50)' : 'var(--danger, #e74c3c)'}` }}>
+                {aiTestResult.success ? (
+                  <>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      ✅ Generated via <strong>{aiTestResult.used?.provider}</strong> · {aiTestResult.used?.model}
+                    </div>
+                    <div style={{ fontSize: '15px', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{aiTestResult.caption}</div>
+                  </>
+                ) : (
+                  <div style={{ color: 'var(--danger)' }}>❌ {aiTestResult.error}</div>
+                )}
+                {aiTestResult.attempts?.length > 0 && (
+                  <details style={{ marginTop: '10px', fontSize: '12px' }}>
+                    <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>Provider attempts ({aiTestResult.attempts.length})</summary>
+                    <ul style={{ marginTop: '6px', paddingLeft: '18px' }}>
+                      {aiTestResult.attempts.map((a, i) => (
+                        <li key={i} style={{ color: a.ok ? 'var(--success, #4caf50)' : 'var(--danger, #e74c3c)' }}>
+                          {a.ok ? '✓' : '✗'} {a.provider} / {a.model}{a.error ? `: ${a.error}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </div>
             )}
           </div>
@@ -1182,7 +1618,8 @@ function App() {
             <div className="section-title"><span className="icon">ℹ️</span> System Info</div>
             <div className="info-grid">
               <div className="info-row"><span className="info-label">Connected Pages</span><span className="info-value">{pages.length}</span></div>
-              <div className="info-row"><span className="info-label">Backend Port</span><span className="info-value">5002</span></div>
+              <div className="info-row"><span className="info-label">Backend Port</span><span className="info-value">{window.location.port || '80'}</span></div>
+              <div className="info-row"><span className="info-label">Tool name</span><span className="info-value">{aiSettings.tool_name || 'imagestool1'}</span></div>
               <div className="info-row"><span className="info-label">Engine Status</span><span className={`info-value status-text ${engineStatus?.status || 'idle'}`}>{engineStatus?.status?.toUpperCase() || 'IDLE'}</span></div>
             </div>
           </div>

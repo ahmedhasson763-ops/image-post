@@ -45,20 +45,20 @@ if not exist "frontend\dist" (
 )
 
 :: Start backend server
-echo [START] Starting EasyMotion server on port 5002...
+echo [START] Starting image-post server on port 5016...
 echo.
-start "EasyMotion Server" cmd /k "cd /d "%~dp0" && node server.js"
+start "image-post Server" cmd /k "cd /d "%~dp0" && node server.js"
 
 :: Wait for server to start
 timeout /t 3 /nobreak >nul
 
 :: Open browser
 echo [OPEN] Opening dashboard...
-start http://localhost:5002
+start http://localhost:5016
 
 echo.
-echo ✅ EasyMotion is running!
-echo    Backend:  http://localhost:5002
+echo image-post is running!
+echo    Backend:  http://localhost:5016
 echo    Dashboard will open in your browser.
 echo.
 echo Press any key to close this window (server will keep running)...

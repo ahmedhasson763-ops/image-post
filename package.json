@@ -1,11 +1,14 @@
 {
-  "name": "easymotion",
-  "version": "1.0.0",
-  "description": "EasyMotion — Facebook Multi-Page Auto Content Poster",
+  "name": "image-post",
+  "version": "2.0.0",
+  "description": "Folder2Page / image-post — Facebook Multi-Page Auto Content Poster with AI captions (OpenRouter/Gemini/Groq) and proxy support",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build": "cd frontend && npm install && npm run build",
+    "postinstall": "echo 'Run `npm run build` to build the frontend before `npm start`.'",
+    "lint": "node --check server.js && node -e \"['controllers/apiController.js','controllers/aiController.js','engine/postingEngine.js','services/aiCaptionService.js','services/facebookService.js','services/proxyService.js','database/db.js','routes/apiRoutes.js'].forEach(f => require('child_process').execSync('node --check ' + f, { stdio: 'inherit' }))\""
   },
   "dependencies": {
     "axios": "^1.6.8",

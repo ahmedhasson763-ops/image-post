@@ -1,15 +1,16 @@
 @echo off
-title Folder2Page - Auto Content Poster Setup
+title image-post - Setup and Run
 color 0A
 
 echo.
 echo ========================================================
-echo   Folder2Page - Setup and Run
+echo   image-post (Folder2Page) - Setup and Run
 echo ========================================================
 echo.
 
+cd /d "%~dp0"
+
 echo [1/3] Installing backend packages...
-cd /d "H:\EasyMotion\Page to post"
 call npm install
 if %errorlevel% neq 0 (
     echo ERROR: Backend install failed!
@@ -20,22 +21,30 @@ echo OK - Backend packages installed!
 echo.
 
 echo [2/3] Building frontend...
-cd /d "H:\EasyMotion\Page to post\frontend"
-call npm run build
+cd frontend
+call npm install
 if %errorlevel% neq 0 (
-    echo ERROR: Frontend build failed!
+    echo ERROR: Frontend install failed!
+    cd ..
     pause
     exit /b 1
 )
+call npm run build
+if %errorlevel% neq 0 (
+    echo ERROR: Frontend build failed!
+    cd ..
+    pause
+    exit /b 1
+)
+cd ..
 echo OK - Frontend built!
 echo.
 
 echo [3/3] Starting server...
-cd /d "H:\EasyMotion\Page to post"
 echo.
 echo ========================================================
-echo   Server starting on http://localhost:5002
-echo   Proxy tab with country flags is ready!
+echo   Server starting on http://localhost:5016
+echo   (override with `set PORT=5017` to change)
 echo ========================================================
 echo.
 node server.js

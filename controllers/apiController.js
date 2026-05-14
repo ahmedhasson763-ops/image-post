@@ -183,16 +183,94 @@ exports.deletePage = async (req, res) => {
 // FOLDER OPERATIONS
 // ═══════════════════════════════════════
 
-exports.browseFolder = (req, res) => {
-  const { exec } = require('child_process');
-  const script = `$app = New-Object -com Shell.Application; $folder = $app.BrowseForFolder(0, 'Select Content Folder for Folder2Page', 0, 0); if($folder) { $folder.Self.Path }`;
-  exec(`powershell.exe -Command "${script}"`, (err, stdout) => {
-    if (stdout && stdout.trim().length > 0) {
-      res.json({ path: stdout.trim() });
-    } else {
-      res.json({ path: null });
+/**
+ * Cross-platform folder picker.
+ *
+ * - Windows: shells out to PowerShell's Shell.Application BrowseForFolder dialog.
+ * - Linux/macOS: there's no equivalent system dialog from a headless server, so we
+ *   return the default content path from AI settings (`default_content_folder`),
+ *   falling back to `/root/<tool_name>content`. The user can still edit the path
+ *   manually in the UI text input.
+ */
+exports.browseFolder = async (req, res) => {
+  if (process.platform === 'win32') {
+    const { exec } = require('child_process');
+    const script = `$app = New-Object -com Shell.Application; $folder = $app.BrowseForFolder(0, 'Select Content Folder for Folder2Page', 0, 0); if($folder) { $folder.Self.Path }`;
+    return exec(`powershell.exe -Command "${script}"`, (err, stdout) => {
+      if (stdout && stdout.trim().length > 0) res.json({ path: stdout.trim() });
+      else res.json({ path: null });
+    });
+  }
+
+  // Linux / macOS: derive a suggestion from AI settings
+  try {
+    const row = await getQuery(`SELECT default_content_folder, tool_name FROM ai_settings WHERE id=1`);
+    const suggested = (row?.default_content_folder && row.default_content_folder.trim())
+      || (row?.tool_name ? `/root/${row.tool_name}content` : '/root/imagestool1content');
+    res.json({
+      path: fs.existsSync(suggested) ? suggested : null,
+      suggested,
+      message: fs.existsSync(suggested)
+        ? `Using default folder: ${suggested}`
+        : `Suggested folder "${suggested}" does not exist yet. Create it via FileZilla (mkdir) or edit the path manually.`
+    });
+  } catch (e) {
+    res.json({ path: null, error: e.message });
+  }
+};
+
+/**
+ * List immediate subdirectories of a given path. Used by the UI folder picker
+ * modal so the user can navigate visually on the VPS without an OS dialog.
+ *
+ * Hardening:
+ *   - Path must be absolute.
+ *   - Path must exist and be a directory.
+ *   - We do NOT follow symlinks outside the target (no recursion either).
+ */
+exports.listDir = async (req, res) => {
+  try {
+    let dir = (req.query.path || '').toString();
+    if (!dir) {
+      // Default: on Linux start at /root, on Windows show drives
+      if (process.platform === 'win32') {
+        // Crude drive listing
+        const drives = [];
+        for (let c = 67; c < 91; c++) {  // C-Z
+          const d = String.fromCharCode(c) + ':\\';
+          try { if (fs.existsSync(d)) drives.push({ name: d, path: d, isDir: true }); } catch (_) {}
+        }
+        return res.json({ path: '', parent: null, entries: drives });
+      }
+      dir = '/root';
+      if (!fs.existsSync(dir)) dir = '/home';
+      if (!fs.existsSync(dir)) dir = '/';
     }
-  });
+    if (!path.isAbsolute(dir)) return res.status(400).json({ error: 'Path must be absolute' });
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Path does not exist' });
+    const stat = fs.statSync(dir);
+    if (!stat.isDirectory()) return res.status(400).json({ error: 'Path is not a directory' });
+
+    const entries = [];
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        // Skip hidden files starting with a dot (typical Unix convention)
+        if (e.name.startsWith('.')) continue;
+        if (e.isDirectory()) entries.push({ name: e.name, path: path.join(dir, e.name), isDir: true });
+      }
+    } catch (e) {
+      return res.status(403).json({ error: `Cannot read directory: ${e.message}` });
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const parent = path.dirname(dir);
+    res.json({
+      path: dir,
+      parent: parent === dir ? null : parent,
+      entries
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'List dir failed: ' + err.message });
+  }
 };
 
 /**

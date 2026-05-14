@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const api = require('../controllers/apiController');
+const ai = require('../controllers/aiController');
 
 // Auth & Tokens
 router.post('/auth', api.authenticate);
@@ -15,6 +16,7 @@ router.delete('/pages/:id', api.deletePage);
 // Folder
 router.post('/browse-folder', api.browseFolder);
 router.post('/scan-folder', api.scanFolder);
+router.get('/list-dir', api.listDir);
 
 
 // Sessions & Engine
@@ -54,5 +56,16 @@ router.post('/proxies/:id/check', api.checkProxy);
 router.get('/proxy-map', api.getProxyMap);
 router.post('/proxy-map/auto', api.autoDistributeProxies);
 router.post('/proxy-map', api.saveProxyMap);
+
+// AI Captions
+router.get('/ai/settings', ai.getAISettings);
+router.post('/ai/settings', ai.updateAISettings);
+router.get('/ai/providers', ai.getAIProviders);
+router.post('/ai/providers', ai.addAIProvider);
+router.put('/ai/providers/:id', ai.updateAIProvider);
+router.delete('/ai/providers/:id', ai.deleteAIProvider);
+router.post('/ai/providers/:id/toggle', ai.toggleAIProvider);
+router.post('/ai/test', ai.testAICaption);
+router.get('/ai/sample', ai.pickSampleImage);
 
 module.exports = router;
